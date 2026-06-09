@@ -1,4 +1,4 @@
-# Day 03: Data Preprocessing for Time Series
+# Day 03: Data Preprocessing for Time Series 
 
 **Project:** Retail Sales Forecasting & Inventory Prediction (Corporación Favorita)  
 **Objective:** Clean and format raw data for machine learning models while strictly preventing temporal data leakage. 
