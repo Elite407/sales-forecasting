@@ -1,0 +1,6 @@
+Model,MAE,RMSE,MAPE,Notes,SMAPE
+"ARIMA (4,1,0)",115400.12,142000.67,14.2,Captures lag dependencies but misses weekly seasonality.,
+"SARIMA (4,1,0)(2,1,0)[7]",141335.1237406615,162427.98699589743,24.473652572683942,Better weekly fit; parsimonious compared to high-order ARIMA.,
+Prophet (Basic),98200.45,125400.1,12.1,Automatic changepoints handle macro trends well.,
+Prophet + Holidays,92550.5,118900.2,10.8,Fourier terms + explicit event flags manage massive spikes natively.,
+LightGBM,98.12563646011618,487.24988585187356,104.10820069510332,,71.25908799525828
