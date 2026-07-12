@@ -11,9 +11,9 @@ st.set_page_config(page_title="Favorita Sales Forecasting", layout="wide", page_
 # ---------------------------------------------------------
 MODEL_PATH = "models/lgbm_model.pkl"
 DATA_PATH = "data/processed/feature_store.csv"
-COMPARISON_PATH = "reports/model_comparison.csv"
-FEATURE_IMPORTANCE_IMG = "reports/figures/lgbm_feature_importance.png"
-PROPHET_IMG = "reports/figures/prophet_components.png"
+COMPARISON_PATH = "reports/model_comparison_table.csv"
+FEATURE_IMPORTANCE_IMG = "reports/lgbm_feature_importance.png"
+PROPHET_IMG = "reports/prophet_components_holidays.png"
 
 # Exact feature order the trained LightGBM Booster expects.
 # (Verified directly against the model with model.feature_name() —
