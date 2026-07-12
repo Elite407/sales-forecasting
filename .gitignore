@@ -4,3 +4,5 @@
 *.keras
 __pycache__/
 .ipynb_checkpoints/
+data/processed/clean_merged.csv
+data/processed/clean_merged.csv
