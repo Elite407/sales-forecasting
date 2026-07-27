@@ -5,3 +5,5 @@ lightgbm
 scikit-learn
 plotly
 shap
+google-genai
+scikit-learn
