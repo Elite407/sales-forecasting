@@ -8,6 +8,12 @@ import pickle
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+# NEW deps for the GenAI Analyst tab (6th tab, added below):
+#   - add `google-genai` and `scikit-learn` to requirements.txt
+#   - set GEMINI_API_KEY in .streamlit/secrets.toml (local) or the Streamlit Cloud
+#     app's Secrets settings (deployed). Free key: https://aistudio.google.com/apikey
 
 warnings.filterwarnings("ignore")
 
@@ -158,6 +164,356 @@ if missing_cols:
     st.error(f"feature_store.csv is missing columns the model needs: {missing_cols}")
     st.stop()
 
+# ===========================================================
+# GenAI Analyst — knowledge base, tool functions, agent loop
+# (backs the 6th tab, defined further down). Kept self-contained and defensive
+# so a missing package or API key degrades gracefully instead of breaking the
+# rest of the app.
+# ===========================================================
+
+# --- Domain knowledge base for retrieval (RAG). TF-IDF, not embeddings — this
+# stays a few KB and avoids pulling PyTorch into the Streamlit Cloud deploy. ---
+GENAI_KNOWLEDGE_BASE = [
+    "On April 16, 2016, a 7.8-magnitude earthquake struck Ecuador near Pedernales. "
+    "Relief efforts in the following weeks led people to donate water and other "
+    "essential goods, which significantly affected supermarket sales nationally "
+    "for several weeks after the earthquake.",
+
+    "Ecuador's economy is oil-dependent and WTI oil prices collapsed from over "
+    "$100/barrel in mid-2014 to under $30/barrel by early 2016, straining "
+    "government spending and consumer demand through much of the sample period.",
+
+    "Holidays in this dataset are typed as Local, Regional, or National in scope, "
+    "and some are 'transferred' to a different date than their traditional one, or "
+    "marked as a 'Bridge' day added to extend a holiday, or a 'Work Day' that makes "
+    "up for a bridge day elsewhere — the transferred date is the one that actually "
+    "affects sales, not the traditional date.",
+
+    "Public sector wages in Ecuador are paid on the 15th and on the last day of "
+    "each month, which tends to produce a recurring sales bump in the days "
+    "immediately following those paydays.",
+
+    "Ecuador has used the US dollar as its official currency since 2000, so sales "
+    "figures in this dataset are not affected by local currency devaluation risk "
+    "the way some other Latin American retail datasets can be.",
+
+    "The 'onpromotion' signal indicates how many items in a product family were "
+    "on promotion on a given day; promo intensity is one of the stronger drivers "
+    "the LightGBM model picks up in SHAP, alongside recent lag and rolling-mean sales.",
+
+    "December is the strongest seasonal period in this dataset across most "
+    "product families, especially GROCERY, BEVERAGES, and LIQUOR/WINE/BEER, "
+    "consistent with Christmas and New Year retail demand.",
+
+    "Rows flagged `is_anomaly = 1` in this pipeline are statistically detected "
+    "outliers (unusually large deviations from recent rolling behavior), not "
+    "confirmed data-quality errors — a flagged spike can reflect a real event "
+    "(like the earthquake or a big promotion) rather than a mistake in the data.",
+
+    "LightGBM in this project is trained at row level (store x product family x "
+    "day), while ARIMA, SARIMA, and Prophet are all fit on the national daily "
+    "aggregate — so their error metrics are not directly comparable on a like-for-"
+    "like basis without accounting for that granularity difference.",
+
+    "Back-to-school shopping season in Ecuador falls at different times in "
+    "different regions — around April-May on the coast and around August-"
+    "September in the highlands — which can show up as regional demand bumps "
+    "in school/office supplies and related categories that a national-only "
+    "model would smooth over.",
+]
+
+
+@st.cache_resource
+def _get_genai_kb_index():
+    vectorizer = TfidfVectorizer(stop_words="english")
+    doc_matrix = vectorizer.fit_transform(GENAI_KNOWLEDGE_BASE)
+    return vectorizer, doc_matrix
+
+
+def genai_retrieve_context(query, k=3):
+    vectorizer, doc_matrix = _get_genai_kb_index()
+    q_vec = vectorizer.transform([query])
+    sims = (doc_matrix @ q_vec.T).toarray().ravel()
+    top_idx = sims.argsort()[::-1][:k]
+    return [GENAI_KNOWLEDGE_BASE[i] for i in top_idx if sims[i] > 0]
+
+
+# --- SHAP explainer for the GenAI tool, independent of the SHAP tab below so
+# this tab still works even if that tab's own setup changes. ---
+try:
+    import shap as _genai_shap
+
+    @st.cache_resource
+    def _get_genai_shap_explainer(_model):
+        return _genai_shap.TreeExplainer(_model)
+
+    _GENAI_SHAP_AVAILABLE = True
+except ImportError:
+    _GENAI_SHAP_AVAILABLE = False
+
+
+# --- Tool functions: these are what the LLM can actually call. Every number
+# the agent states should trace back to one of these — nothing is invented. ---
+def _tool_get_model_comparison(**_):
+    try:
+        comp = load_comparison()
+        return comp.to_dict(orient="records")
+    except Exception as e:
+        return {"error": f"Could not load model comparison table: {e}"}
+
+
+def _tool_get_shap_drivers(store=None, family=None, date=None, **_):
+    if not _GENAI_SHAP_AVAILABLE:
+        return {"error": "The `shap` package isn't installed in this environment."}
+    try:
+        target_date = pd.to_datetime(date)
+    except Exception:
+        return {"error": f"Could not parse date '{date}'. Use YYYY-MM-DD format."}
+
+    row = df[(df["store_nbr"] == store) & (df["family"] == family) & (df["date"] == target_date)]
+    if row.empty:
+        return {
+            "error": (
+                f"No row found for store={store}, family={family}, date={date} in the "
+                f"loaded data window ({df['date'].min().date()} to {df['date'].max().date()})."
+            )
+        }
+    row = row.iloc[0]
+    X_row = row[MODEL_FEATURES].apply(pd.to_numeric, errors="coerce").astype(float)
+    X_row_df = pd.DataFrame([X_row.values], columns=MODEL_FEATURES)
+
+    explainer = _get_genai_shap_explainer(model)
+    shap_vals = explainer.shap_values(X_row_df)[0]
+    contrib = sorted(zip(MODEL_FEATURES, shap_vals), key=lambda t: -abs(t[1]))[:5]
+
+    return {
+        "actual_sales": float(row["sales"]),
+        "top_drivers": [
+            {"feature": FEATURE_LABELS.get(f, f), "shap_contribution": round(float(v), 2)}
+            for f, v in contrib
+        ],
+    }
+
+
+def _tool_get_anomalies(store=None, family=None, **_):
+    subset = df[(df["store_nbr"] == store) & (df["family"] == family) & (df["is_anomaly"] == 1)]
+    if subset.empty:
+        return {"anomaly_dates": [], "note": "No flagged anomalies for this store/family in the loaded window."}
+    return {"anomaly_dates": subset[["date", "sales"]].astype(str).to_dict(orient="records")}
+
+
+def _tool_get_forecast_metrics(store=None, family=None, **_):
+    subset = df[(df["store_nbr"] == store) & (df["family"] == family)].sort_values("date")
+    if subset.empty:
+        return {"error": "No data for this store/family in the loaded window."}
+    X = subset[MODEL_FEATURES].apply(pd.to_numeric, errors="coerce").astype(float)
+    preds = model.predict(X)
+    mae = float(np.mean(np.abs(subset["sales"] - preds)))
+    rmse = float(np.sqrt(np.mean((subset["sales"] - preds) ** 2)))
+    return {
+        "store": store,
+        "family": FAMILY_NAMES.get(family, family),
+        "mae": round(mae, 2),
+        "rmse": round(rmse, 2),
+        "avg_daily_sales": round(float(subset["sales"].mean()), 2),
+        "n_days": int(len(subset)),
+    }
+
+
+def _tool_search_context(query=None, **_):
+    return {"context_snippets": genai_retrieve_context(query or "")}
+
+
+GENAI_FUNCTIONS = {
+    "get_model_comparison": _tool_get_model_comparison,
+    "get_shap_drivers": _tool_get_shap_drivers,
+    "get_anomalies": _tool_get_anomalies,
+    "get_forecast_metrics": _tool_get_forecast_metrics,
+    "search_context": _tool_search_context,
+}
+
+GENAI_TOOLS = [
+    {
+        "type": "function",
+        "name": "get_model_comparison",
+        "description": "Returns the model comparison table (error metrics per model, e.g. ARIMA/SARIMA/Prophet/LightGBM) as a list of records.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "type": "function",
+        "name": "get_shap_drivers",
+        "description": (
+            "Returns the actual sales value and the top SHAP feature contributions driving "
+            "the LightGBM prediction for a specific store, product family, and date."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "store": {"type": "integer", "description": "Store number, e.g. 3"},
+                "family": {"type": "integer", "description": "Product family code (0-32) — see the code map in your instructions"},
+                "date": {"type": "string", "description": "Date in YYYY-MM-DD format"},
+            },
+            "required": ["store", "family", "date"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_anomalies",
+        "description": "Lists dates flagged as statistical sales anomalies for a specific store and product family.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "store": {"type": "integer"},
+                "family": {"type": "integer"},
+            },
+            "required": ["store", "family"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_forecast_metrics",
+        "description": "Returns LightGBM prediction accuracy (MAE, RMSE, average daily sales) for a specific store and product family over the loaded data window.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "store": {"type": "integer"},
+                "family": {"type": "integer"},
+            },
+            "required": ["store", "family"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "search_context",
+        "description": (
+            "Searches a knowledge base of real-world context about this dataset (the 2016 "
+            "Ecuador earthquake, oil price shocks, holiday calendar quirks, payday effects, "
+            "etc.) for information relevant to a query."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
+]
+
+_GENAI_FAMILY_CODE_MAP = ", ".join(f"{code}={name}" for code, name in FAMILY_NAMES.items())
+
+GENAI_SYSTEM_PROMPT = (
+    "You are an analyst embedded in a retail demand-forecasting dashboard (Corporación "
+    "Favorita Kaggle dataset). Only state numbers that come from a tool result — never "
+    "estimate or invent sales figures, SHAP values, or error metrics. If a tool returns "
+    "an error or no data, say so plainly rather than filling the gap yourself. If a "
+    "question is unrelated to this forecasting project, politely decline. "
+    f"Product family codes: {_GENAI_FAMILY_CODE_MAP}. When the user names a family in "
+    "words (e.g. 'beverages'), map it to the matching numeric code before calling a tool."
+)
+
+try:
+    from google import genai as _google_genai
+    GENAI_SDK_AVAILABLE = True
+except ImportError:
+    GENAI_SDK_AVAILABLE = False
+
+try:
+    import openai as _openai
+    GROQ_SDK_AVAILABLE = True
+except ImportError:
+    GROQ_SDK_AVAILABLE = False
+
+def _get_groq_api_key():
+    key = None
+    try:
+        key = st.secrets.get("GROQ_API_KEY")
+    except Exception:
+        pass
+    return key or os.environ.get("GROQ_API_KEY")
+
+@st.cache_data(show_spinner=False)
+def generate_quick_insight_groq(selected_families_str, date_min_str, date_max_str, total_sales, leading_family, trend_direction):
+    if not GROQ_SDK_AVAILABLE:
+        return "The `openai` package isn't installed. Quick Insight is disabled."
+    key = _get_groq_api_key()
+    if not key:
+        return "GROQ_API_KEY is missing from secrets.toml. Quick Insight is disabled."
+    try:
+        client = _openai.OpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=key
+        )
+        prompt = (
+            f"Write a 2-3 sentence plain-English caption summarizing these sales metrics for {selected_families_str} "
+            f"between {date_min_str} and {date_max_str}:\n"
+            f"- Total Sales: {total_sales:,.0f}\n"
+            f"- Leading Family: {leading_family}\n"
+            f"- Trend Direction: {trend_direction}\n"
+            "Keep it professional and concise. Do not add any filler text."
+        )
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Could not generate Quick Insight via Groq API: {e}"
+
+
+def _get_gemini_api_key():
+    key = None
+    try:
+        key = st.secrets.get("GEMINI_API_KEY")
+    except Exception:
+        pass
+    return key or os.environ.get("GEMINI_API_KEY")
+
+
+@st.cache_resource
+def get_genai_client(api_key):
+    return _google_genai.Client(api_key=api_key)
+
+
+def run_genai_agent(client, user_message, previous_interaction_id=None,
+                     model="gemini-3.6-flash", max_rounds=5):
+    """One user turn of the agent loop: calls the model, executes any tool calls
+    it asks for, and keeps going (up to max_rounds) until it returns plain text."""
+    tool_log = []
+    interaction = client.interactions.create(
+        model=model,
+        system_instruction=GENAI_SYSTEM_PROMPT,
+        tools=GENAI_TOOLS,
+        input=user_message,
+        previous_interaction_id=previous_interaction_id,
+    )
+
+    for _ in range(max_rounds):
+        fc_steps = [s for s in interaction.steps if s.type == "function_call"]
+        if not fc_steps:
+            return interaction.output_text, tool_log, interaction.id
+
+        function_results = []
+        for step in fc_steps:
+            fn = GENAI_FUNCTIONS.get(step.name)
+            result = fn(**step.arguments) if fn else {"error": f"Unknown tool '{step.name}'"}
+            tool_log.append({"tool": step.name, "input": step.arguments, "result": result})
+            function_results.append({
+                "type": "function_result",
+                "name": step.name,
+                "call_id": step.id,
+                "result": [{"type": "text", "text": json.dumps(result, default=str)}],
+            })
+
+        interaction = client.interactions.create(
+            model=model,
+            tools=GENAI_TOOLS,
+            previous_interaction_id=interaction.id,
+            input=function_results,
+        )
+
+    return "Ran out of tool-call rounds — try a more specific question.", tool_log, interaction.id
+
+
 # ---------------------------------------------------------
 # Header
 # ---------------------------------------------------------
@@ -179,8 +535,9 @@ st.info(
     "trains on the full multi-year national series."
 )
 
-tab_explore, tab_categories, tab_classical, tab_shap, tab_compare = st.tabs(
-    ["🔎 Forecast Explorer", "🗂️ Category Trends", "📐 Classical Models", "🧠 SHAP & Anomalies", "📊 Model Comparison"]
+tab_explore, tab_categories, tab_classical, tab_shap, tab_compare, tab_genai = st.tabs(
+    ["🔎 Forecast Explorer", "🗂️ Category Trends", "📐 Classical Models", "🧠 SHAP & Anomalies",
+     "📊 Model Comparison", "🤖 GenAI Analyst"]
 )
 
 # ===========================================================
@@ -287,6 +644,36 @@ with tab_categories:
             "Top families by total sales in this data window: "
             + ", ".join(f"{FAMILY_NAMES.get(c, c)}" for c in family_totals.head(8).index)
         )
+        
+        st.subheader("✨ Quick Insight")
+        total_sales_selected = cat_df["sales"].sum()
+        family_group = cat_df.groupby("family_name")["sales"].sum()
+        leading_fam = family_group.idxmax() if not family_group.empty else "N/A"
+        
+        trend_series = cat_df.groupby("date")["sales"].sum().sort_index()
+        if len(trend_series) > 1:
+            mid = len(trend_series) // 2
+            first_half = trend_series.iloc[:mid].mean()
+            second_half = trend_series.iloc[mid:].mean()
+            if second_half > first_half * 1.05:
+                trend_dir = "Upward"
+            elif second_half < first_half * 0.95:
+                trend_dir = "Downward"
+            else:
+                trend_dir = "Stable"
+        else:
+            trend_dir = "Insufficient data"
+            
+        d_min = cat_df["date"].min().strftime('%Y-%m-%d') if not cat_df.empty else "N/A"
+        d_max = cat_df["date"].max().strftime('%Y-%m-%d') if not cat_df.empty else "N/A"
+        fams_str = ", ".join([FAMILY_NAMES.get(c, str(c)) for c in selected_families])
+        
+        with st.spinner("Generating insight..."):
+            insight = generate_quick_insight_groq(
+                fams_str, d_min, d_max,
+                total_sales_selected, leading_fam, trend_dir
+            )
+        st.info(insight)
 
 # ===========================================================
 # TAB 3 — ARIMA / SARIMA / Prophet summaries
@@ -561,6 +948,88 @@ with tab_compare:
             st.image(PROPHET_IMG, use_container_width=True)
         except Exception:
             st.info("Prophet components image not found.")
+
+# ===========================================================
+# TAB 6 — GenAI Analyst (Gemini API, tool-calling + RAG)
+# ===========================================================
+with tab_genai:
+    st.header("🤖 Ask the GenAI Analyst")
+    st.caption(
+        "Answers are grounded in this app's own pipeline — every number traces back "
+        "to a tool call (shown below each response), and real-world context (the 2016 "
+        "earthquake, oil price shocks, holiday quirks) is retrieved from a small knowledge base."
+    )
+
+    if not GENAI_SDK_AVAILABLE:
+        st.error(
+            "The `google-genai` package isn't installed. Add `google-genai` to "
+            "requirements.txt to enable this tab."
+        )
+    else:
+        genai_api_key = _get_gemini_api_key()
+        if not genai_api_key:
+            st.warning(
+                "No `GEMINI_API_KEY` found in secrets or environment. Get a free key at "
+                "[aistudio.google.com/apikey](https://aistudio.google.com/apikey) and add it "
+                "as `GEMINI_API_KEY` to `.streamlit/secrets.toml` (locally) or your Streamlit "
+                "Cloud app's Secrets settings (deployed)."
+            )
+        else:
+            genai_client = get_genai_client(genai_api_key)
+
+            if "genai_chat_history" not in st.session_state:
+                st.session_state.genai_chat_history = []
+            if "genai_last_interaction_id" not in st.session_state:
+                st.session_state.genai_last_interaction_id = None
+
+            st.markdown("**Try an example:**")
+            example_questions = [
+                "Why did sales spike around the 2016 earthquake?",
+                "Which model has the lowest error overall?",
+                "Any flagged anomalies for store 1, family 3 (beverages)?",
+            ]
+            example_cols = st.columns(len(example_questions))
+            clicked_example = None
+            for col, q in zip(example_cols, example_questions):
+                if col.button(q, use_container_width=True, key=f"genai_ex_{q}"):
+                    clicked_example = q
+
+            for msg in st.session_state.genai_chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            typed_q = st.chat_input("Ask about forecasts, drivers, anomalies, or model accuracy…")
+            user_q = typed_q or clicked_example
+
+            if user_q:
+                st.session_state.genai_chat_history.append({"role": "user", "content": user_q})
+                with st.chat_message("user"):
+                    st.markdown(user_q)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking…"):
+                        try:
+                            genai_answer, genai_tool_log, genai_new_id = run_genai_agent(
+                                genai_client, user_q, st.session_state.genai_last_interaction_id
+                            )
+                        except Exception as e:
+                            genai_answer = (
+                                f"Something went wrong calling the Gemini API: {e}. "
+                                "This is often a rate limit on the free tier — wait a "
+                                "minute and try again."
+                            )
+                            genai_tool_log = []
+                            genai_new_id = st.session_state.genai_last_interaction_id
+                    st.markdown(genai_answer)
+                    if genai_tool_log:
+                        with st.expander(f"🔧 {len(genai_tool_log)} tool call(s) used"):
+                            for t in genai_tool_log:
+                                st.json(t)
+
+                st.session_state.genai_last_interaction_id = genai_new_id
+                st.session_state.genai_chat_history.append({"role": "assistant", "content": genai_answer})
+
+            st.caption("Powered by the Gemini API (free tier) — replies may take a few seconds.")
 
 st.divider()
 st.caption(
