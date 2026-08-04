@@ -7,3 +7,8 @@ __pycache__/
 data/processed/clean_merged.csv
 data/processed/clean_merged.csv
 .streamlit/secrets.toml
+
+# Large CSV Files
+data/clean_merged.csv
+data/feature_store.csv
+data/train.csv
