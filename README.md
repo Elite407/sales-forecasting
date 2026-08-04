@@ -1,3 +1,5 @@
+# sales-forecasting
+Sales Forecasting using Time Series Models
 # Corporación Favorita Sales Forecasting
 
 This repository contains a comprehensive time-series forecasting pipeline and interactive web application for predicting retail store sales, based on the Corporación Favorita Kaggle dataset.
