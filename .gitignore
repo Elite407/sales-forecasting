@@ -6,3 +6,4 @@ __pycache__/
 .ipynb_checkpoints/
 data/processed/clean_merged.csv
 data/processed/clean_merged.csv
+.streamlit/secrets.toml
