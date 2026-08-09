@@ -1,7 +1,7 @@
 streamlit
 pandas
 numpy
-lightgbm
+lightgbm==4.6.0
 scikit-learn
 plotly
 shap
