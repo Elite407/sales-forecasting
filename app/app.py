@@ -341,69 +341,74 @@ GENAI_FUNCTIONS = {
 }
 
 GENAI_TOOLS = [
-    {
-        "type": "function",
-        "name": "get_model_comparison",
-        "description": "Returns the model comparison table (error metrics per model, e.g. ARIMA/SARIMA/Prophet/LightGBM) as a list of records.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "type": "function",
-        "name": "get_shap_drivers",
-        "description": (
-            "Returns the actual sales value and the top SHAP feature contributions driving "
-            "the LightGBM prediction for a specific store, product family, and date."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "store": {"type": "integer", "description": "Store number, e.g. 3"},
-                "family": {"type": "integer", "description": "Product family code (0-32) — see the code map in your instructions"},
-                "date": {"type": "string", "description": "Date in YYYY-MM-DD format"},
-            },
-            "required": ["store", "family", "date"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "get_anomalies",
-        "description": "Lists dates flagged as statistical sales anomalies for a specific store and product family.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "store": {"type": "integer"},
-                "family": {"type": "integer"},
-            },
-            "required": ["store", "family"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "get_forecast_metrics",
-        "description": "Returns LightGBM prediction accuracy (MAE, RMSE, average daily sales) for a specific store and product family over the loaded data window.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "store": {"type": "integer"},
-                "family": {"type": "integer"},
-            },
-            "required": ["store", "family"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "search_context",
-        "description": (
-            "Searches a knowledge base of real-world context about this dataset (the 2016 "
-            "Ecuador earthquake, oil price shocks, holiday calendar quirks, payday effects, "
-            "etc.) for information relevant to a query."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": ["query"],
-        },
-    },
+    _google_genai.types.Tool(
+        function_declarations=[
+            _google_genai.types.FunctionDeclaration(
+                name="get_model_comparison",
+                description="Returns the model comparison table (error metrics per model, e.g. ARIMA/SARIMA/Prophet/LightGBM) as a list of records.",
+                parameters=_google_genai.types.Schema(
+                    type=_google_genai.types.Type.OBJECT,
+                    properties={},
+                    required=[],
+                ),
+            ),
+            _google_genai.types.FunctionDeclaration(
+                name="get_shap_drivers",
+                description=(
+                    "Returns the actual sales value and the top SHAP feature contributions driving "
+                    "the LightGBM prediction for a specific store, product family, and date."
+                ),
+                parameters=_google_genai.types.Schema(
+                    type=_google_genai.types.Type.OBJECT,
+                    properties={
+                        "store": _google_genai.types.Schema(type=_google_genai.types.Type.INTEGER, description="Store number, e.g. 3"),
+                        "family": _google_genai.types.Schema(type=_google_genai.types.Type.INTEGER, description="Product family code (0-32)"),
+                        "date": _google_genai.types.Schema(type=_google_genai.types.Type.STRING, description="Date in YYYY-MM-DD format"),
+                    },
+                    required=["store", "family", "date"],
+                ),
+            ),
+            _google_genai.types.FunctionDeclaration(
+                name="get_anomalies",
+                description="Lists dates flagged as statistical sales anomalies for a specific store and product family.",
+                parameters=_google_genai.types.Schema(
+                    type=_google_genai.types.Type.OBJECT,
+                    properties={
+                        "store": _google_genai.types.Schema(type=_google_genai.types.Type.INTEGER),
+                        "family": _google_genai.types.Schema(type=_google_genai.types.Type.INTEGER),
+                    },
+                    required=["store", "family"],
+                ),
+            ),
+            _google_genai.types.FunctionDeclaration(
+                name="get_forecast_metrics",
+                description="Returns LightGBM prediction accuracy (MAE, RMSE, average daily sales) for a specific store and product family over the loaded data window.",
+                parameters=_google_genai.types.Schema(
+                    type=_google_genai.types.Type.OBJECT,
+                    properties={
+                        "store": _google_genai.types.Schema(type=_google_genai.types.Type.INTEGER),
+                        "family": _google_genai.types.Schema(type=_google_genai.types.Type.INTEGER),
+                    },
+                    required=["store", "family"],
+                ),
+            ),
+            _google_genai.types.FunctionDeclaration(
+                name="search_context",
+                description=(
+                    "Searches a knowledge base of real-world context about this dataset (the 2016 "
+                    "Ecuador earthquake, oil price shocks, holiday calendar quirks, payday effects, "
+                    "etc.) for information relevant to a query."
+                ),
+                parameters=_google_genai.types.Schema(
+                    type=_google_genai.types.Type.OBJECT,
+                    properties={
+                        "query": _google_genai.types.Schema(type=_google_genai.types.Type.STRING),
+                    },
+                    required=["query"],
+                ),
+            ),
+        ]
+    )
 ]
 
 _GENAI_FAMILY_CODE_MAP = ", ".join(f"{code}={name}" for code, name in FAMILY_NAMES.items())
@@ -482,44 +487,68 @@ def get_genai_client(api_key):
     return _google_genai.Client(api_key=api_key)
 
 
-def run_genai_agent(client, user_message, previous_interaction_id=None,
-                     model="gemini-3.6-flash", max_rounds=5):
+def run_genai_agent(client, user_message, chat_contents=None,
+                     model="gemini-2.0-flash", max_rounds=5):
     """One user turn of the agent loop: calls the model, executes any tool calls
-    it asks for, and keeps going (up to max_rounds) until it returns plain text."""
+    it asks for, and keeps going (up to max_rounds) until it returns plain text.
+
+    Uses client.models.generate_content() with function-calling (works with
+    API keys) instead of the Interactions API (requires OAuth).
+    """
     tool_log = []
-    interaction = client.interactions.create(
-        model=model,
+    types = _google_genai.types
+
+    # Build contents list: prior history + new user message
+    contents = list(chat_contents or [])
+    contents.append(types.Content(role="user", parts=[types.Part(text=user_message)]))
+
+    config = types.GenerateContentConfig(
         system_instruction=GENAI_SYSTEM_PROMPT,
         tools=GENAI_TOOLS,
-        input=user_message,
-        previous_interaction_id=previous_interaction_id,
     )
 
     for _ in range(max_rounds):
-        fc_steps = [s for s in interaction.steps if s.type == "function_call"]
-        if not fc_steps:
-            return interaction.output_text, tool_log, interaction.id
-
-        function_results = []
-        for step in fc_steps:
-            fn = GENAI_FUNCTIONS.get(step.name)
-            result = fn(**step.arguments) if fn else {"error": f"Unknown tool '{step.name}'"}
-            tool_log.append({"tool": step.name, "input": step.arguments, "result": result})
-            function_results.append({
-                "type": "function_result",
-                "name": step.name,
-                "call_id": step.id,
-                "result": [{"type": "text", "text": json.dumps(result, default=str)}],
-            })
-
-        interaction = client.interactions.create(
+        response = client.models.generate_content(
             model=model,
-            tools=GENAI_TOOLS,
-            previous_interaction_id=interaction.id,
-            input=function_results,
+            contents=contents,
+            config=config,
         )
 
-    return "Ran out of tool-call rounds — try a more specific question.", tool_log, interaction.id
+        # Check if the model wants to call functions
+        function_call_parts = [
+            p for p in (response.candidates[0].content.parts or [])
+            if p.function_call is not None
+        ]
+
+        if not function_call_parts:
+            # No function calls — return the text response
+            answer_text = response.text or "(No response text)"
+            # Append the model's response to history
+            contents.append(response.candidates[0].content)
+            return answer_text, tool_log, contents
+
+        # Append the model's response (with function call parts) to history
+        contents.append(response.candidates[0].content)
+
+        # Execute each function call and build FunctionResponse parts
+        fn_response_parts = []
+        for part in function_call_parts:
+            fc = part.function_call
+            fn = GENAI_FUNCTIONS.get(fc.name)
+            args = dict(fc.args) if fc.args else {}
+            result = fn(**args) if fn else {"error": f"Unknown tool '{fc.name}'"}
+            tool_log.append({"tool": fc.name, "input": args, "result": result})
+            fn_response_parts.append(
+                types.Part(function_response=types.FunctionResponse(
+                    name=fc.name,
+                    response={"result": json.dumps(result, default=str)},
+                ))
+            )
+
+        # Send the function results back to the model
+        contents.append(types.Content(role="user", parts=fn_response_parts))
+
+    return "Ran out of tool-call rounds — try a more specific question.", tool_log, contents
 
 
 # ---------------------------------------------------------
@@ -992,8 +1021,8 @@ with tab_genai:
 
             if "genai_chat_history" not in st.session_state:
                 st.session_state.genai_chat_history = []
-            if "genai_last_interaction_id" not in st.session_state:
-                st.session_state.genai_last_interaction_id = None
+            if "genai_chat_contents" not in st.session_state:
+                st.session_state.genai_chat_contents = []
 
             st.markdown("**Try an example:**")
             example_questions = [
@@ -1022,8 +1051,8 @@ with tab_genai:
                 with st.chat_message("assistant"):
                     with st.spinner("Thinking…"):
                         try:
-                            genai_answer, genai_tool_log, genai_new_id = run_genai_agent(
-                                genai_client, user_q, st.session_state.genai_last_interaction_id
+                            genai_answer, genai_tool_log, genai_new_contents = run_genai_agent(
+                                genai_client, user_q, st.session_state.genai_chat_contents
                             )
                         except Exception as e:
                             genai_answer = (
@@ -1032,14 +1061,14 @@ with tab_genai:
                                 "minute and try again."
                             )
                             genai_tool_log = []
-                            genai_new_id = st.session_state.genai_last_interaction_id
+                            genai_new_contents = st.session_state.genai_chat_contents
                     st.markdown(genai_answer)
                     if genai_tool_log:
                         with st.expander(f"🔧 {len(genai_tool_log)} tool call(s) used"):
                             for t in genai_tool_log:
                                 st.json(t)
 
-                st.session_state.genai_last_interaction_id = genai_new_id
+                st.session_state.genai_chat_contents = genai_new_contents
                 st.session_state.genai_chat_history.append({"role": "assistant", "content": genai_answer})
 
             st.caption("Powered by the Gemini API (free tier) — replies may take a few seconds.")
