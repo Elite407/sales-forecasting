@@ -340,9 +340,16 @@ GENAI_FUNCTIONS = {
     "search_context": _tool_search_context,
 }
 
-GENAI_TOOLS = [
-    _google_genai.types.Tool(
-        function_declarations=[
+try:
+    from google import genai as _google_genai
+    GENAI_SDK_AVAILABLE = True
+except ImportError:
+    GENAI_SDK_AVAILABLE = False
+
+if GENAI_SDK_AVAILABLE:
+    GENAI_TOOLS = [
+        _google_genai.types.Tool(
+            function_declarations=[
             _google_genai.types.FunctionDeclaration(
                 name="get_model_comparison",
                 description="Returns the model comparison table (error metrics per model, e.g. ARIMA/SARIMA/Prophet/LightGBM) as a list of records.",
@@ -409,7 +416,9 @@ GENAI_TOOLS = [
             ),
         ]
     )
-]
+    ]
+else:
+    GENAI_TOOLS = []
 
 _GENAI_FAMILY_CODE_MAP = ", ".join(f"{code}={name}" for code, name in FAMILY_NAMES.items())
 
@@ -423,11 +432,7 @@ GENAI_SYSTEM_PROMPT = (
     "words (e.g. 'beverages'), map it to the matching numeric code before calling a tool."
 )
 
-try:
-    from google import genai as _google_genai
-    GENAI_SDK_AVAILABLE = True
-except ImportError:
-    GENAI_SDK_AVAILABLE = False
+# (google-genai import moved above GENAI_TOOLS)
 
 try:
     import openai as _openai
