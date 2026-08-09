@@ -57,7 +57,7 @@ MODEL_FEATURES = [
     "rolling_mean_7", "rolling_mean_28", "rolling_std_7", "rolling_std_28",
     "expanding_mean_sales", "dcoilwtico",
     "promo_lag_1", "promo_lag_7", "promo_rolling_mean_7",
-    "is_holiday", "is_national_holiday", "days_to_next_holiday", "is_anomaly",
+    "is_holiday",
 ]
 
 # Plain-English labels used in the SHAP anomaly narrative below.
@@ -310,9 +310,14 @@ def _tool_get_forecast_metrics(store=None, family=None, **_):
     if subset.empty:
         return {"error": "No data for this store/family in the loaded window."}
     X = subset[MODEL_FEATURES].apply(pd.to_numeric, errors="coerce").astype(float)
-    preds = model.predict(X)
-    mae = float(np.mean(np.abs(subset["sales"] - preds)))
-    rmse = float(np.sqrt(np.mean((subset["sales"] - preds) ** 2)))
+    valid_mask = ~X.isna().any(axis=1)
+    X = X.loc[valid_mask]
+    subset = subset.loc[valid_mask]
+    if X.empty:
+        return {"error": "All rows had missing features after coercion — cannot predict."}
+    preds = model.predict(X.values)
+    mae = float(np.mean(np.abs(subset["sales"].values - preds)))
+    rmse = float(np.sqrt(np.mean((subset["sales"].values - preds) ** 2)))
     return {
         "store": store,
         "family": FAMILY_NAMES.get(family, family),
@@ -569,9 +574,14 @@ with tab_explore:
         X = subset[MODEL_FEATURES].apply(pd.to_numeric, errors="coerce").astype(float)
         if X.isna().any().any():
             bad_cols = X.columns[X.isna().any()].tolist()
-            st.error(f"Non-numeric values found in columns: {bad_cols}. Check feature_store.csv for stray text/blank cells in these columns.")
+            st.warning(f"Dropping rows with non-numeric values in columns: {bad_cols}.")
+            valid_mask = ~X.isna().any(axis=1)
+            X = X.loc[valid_mask]
+            subset = subset.loc[valid_mask]
+        if X.empty:
+            st.error("No valid rows left after dropping NaN values.")
             st.stop()
-        preds = model.predict(X)
+        preds = model.predict(X.values)
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=subset["date"], y=subset["sales"], name="Actual",
@@ -1036,7 +1046,6 @@ with tab_genai:
 
 st.divider()
 st.caption(
-    "Built as an interim checkpoint for a 38-day sales forecasting project on the "
     "Corporación Favorita Kaggle dataset. Repo: "
     "[github.com/Elite407/sales-forecasting](https://github.com/Elite407/sales-forecasting)"
 )
