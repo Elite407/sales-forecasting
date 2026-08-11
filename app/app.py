@@ -1125,7 +1125,7 @@ with tab_genai:
                 st.session_state.genai_chat_contents = genai_new_contents
                 st.session_state.genai_chat_history.append({"role": "assistant", "content": genai_answer})
 
-            st.caption("Powered by the Gemini API (free tier) — replies may take a few seconds.")
+            # st.caption("Powered by the Gemini API (free tier) — replies may take a few seconds.")
 
 st.divider()
 st.caption(
