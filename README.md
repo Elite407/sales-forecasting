@@ -14,7 +14,7 @@ The project evaluates both classical statistical baselines (ARIMA, SARIMA, Proph
 - **Explainable AI (SHAP):** 
   - Global feature importance to identify primary drivers of sales.
   - Local anomaly explanations detailing which features pushed statistical anomalies up or down.
-- **GenAI Analyst:** A built-in chat agent powered by Gemini/Groq APIs and RAG. The agent grounds its answers in real-world context (e.g., the 2016 Ecuador earthquake, WTI oil price collapse, localized holiday transfers) and queries the underlying dataset dynamically via function calling.
+- **GenAI Analyst:** A built-in chat agent powered by the Gemini API and RAG. The agent grounds its answers in real-world context (e.g., the 2016 Ecuador earthquake, WTI oil price collapse, localized holiday transfers) and queries the underlying dataset dynamically via function calling.
 
 ## Repository Structure
 
@@ -43,7 +43,7 @@ The project evaluates both classical statistical baselines (ARIMA, SARIMA, Proph
    ```bash
    cp .streamlit/secrets.toml.example .streamlit/secrets.toml
    ```
-   Add your `GEMINI_API_KEY` (and optionally `GROQ_API_KEY`) to the `.streamlit/secrets.toml` file.
+   Add your `GEMINI_API_KEY` to the `.streamlit/secrets.toml` file.
 
 4. **Run the application:**
    ```bash

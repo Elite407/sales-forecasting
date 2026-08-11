@@ -434,32 +434,16 @@ GENAI_SYSTEM_PROMPT = (
 
 # (google-genai import moved above GENAI_TOOLS)
 
-try:
-    import openai as _openai
-    GROQ_SDK_AVAILABLE = True
-except ImportError:
-    GROQ_SDK_AVAILABLE = False
-
-def _get_groq_api_key():
-    key = None
-    try:
-        key = st.secrets.get("GROQ_API_KEY")
-    except Exception:
-        pass
-    return key or os.environ.get("GROQ_API_KEY")
-
 @st.cache_data(show_spinner=False)
-def generate_quick_insight_groq(selected_families_str, date_min_str, date_max_str, total_sales, leading_family, trend_direction):
-    if not GROQ_SDK_AVAILABLE:
-        return "The `openai` package isn't installed. Quick Insight is disabled."
-    key = _get_groq_api_key()
+def generate_quick_insight_gemini(selected_families_str, date_min_str, date_max_str, total_sales, leading_family, trend_direction):
+    if not GENAI_SDK_AVAILABLE:
+        return "The `google-genai` package isn't installed. Quick Insight is disabled."
+    key = _get_gemini_api_key()
     if not key:
-        return "GROQ_API_KEY is missing from secrets.toml. Quick Insight is disabled."
+        return ("GEMINI_API_KEY not found. Paste a valid key in the sidebar or add it to "
+                "`.streamlit/secrets.toml`. Get one free at https://aistudio.google.com/apikey")
     try:
-        client = _openai.OpenAI(
-            base_url="https://api.groq.com/openai/v1",
-            api_key=key
-        )
+        client = _google_genai.Client(api_key=key)
         prompt = (
             f"Write a 2-3 sentence plain-English caption summarizing these sales metrics for {selected_families_str} "
             f"between {date_min_str} and {date_max_str}:\n"
@@ -468,23 +452,46 @@ def generate_quick_insight_groq(selected_families_str, date_min_str, date_max_st
             f"- Trend Direction: {trend_direction}\n"
             "Keep it professional and concise. Do not add any filler text."
         )
-        response = client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
         )
-        return response.choices[0].message.content.strip()
+        return response.text.strip()
     except Exception as e:
-        return f"Could not generate Quick Insight via Groq API: {e}"
+        err = str(e)
+        if "401" in err or "UNAUTHENTICATED" in err:
+            return ("⚠️ Invalid API key — your GEMINI_API_KEY was rejected (401). "
+                    "Make sure you're using a key from https://aistudio.google.com/apikey "
+                    "(it should start with `AIzaSy…`). Paste a valid key in the sidebar.")
+        return f"Could not generate Quick Insight via Gemini API: {e}"
 
 
 def _get_gemini_api_key():
+    """Return the Gemini API key from (in priority order):
+    1. Sidebar text-input (session state)
+    2. .streamlit/secrets.toml
+    3. GEMINI_API_KEY environment variable
+    """
+    # Sidebar override (set further down when the page renders)
+    sidebar_key = st.session_state.get("sidebar_gemini_key", "").strip()
+    if sidebar_key:
+        return sidebar_key
+    # secrets.toml
     key = None
     try:
         key = st.secrets.get("GEMINI_API_KEY")
     except Exception:
         pass
     return key or os.environ.get("GEMINI_API_KEY")
+
+
+def _validate_gemini_key(key):
+    """Quick client-side sanity check — real validation happens server-side."""
+    if not key:
+        return False, "No key provided."
+    if len(key) < 20:
+        return False, "Key looks too short — double-check you copied the full value."
+    return True, ""
 
 
 @st.cache_resource
@@ -566,6 +573,32 @@ st.caption(
     "layer for the LightGBM model. Deep learning models (LSTM / TFT / "
     "N-BEATS) are still in progress."
 )
+
+# ---------------------------------------------------------
+# Sidebar — Gemini API key input
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("🔑 Gemini API Key")
+    _existing_key = _get_gemini_api_key()
+    _key_ok, _key_msg = _validate_gemini_key(_existing_key) if _existing_key else (False, "")
+    if _key_ok:
+        st.success("API key loaded ✓", icon="✅")
+    else:
+        if _key_msg:
+            st.warning(_key_msg, icon="⚠️")
+    st.text_input(
+        "Paste your Gemini API key",
+        type="password",
+        key="sidebar_gemini_key",
+        help=(
+            "Get a free key at https://aistudio.google.com/apikey — "
+            "it should start with `AIzaSy…`. This overrides any key in "
+            "secrets.toml for this session."
+        ),
+    )
+    st.caption(
+        "Or add `GEMINI_API_KEY` to `.streamlit/secrets.toml` for persistence."
+    )
 
 date_min = df["date"].min().date()
 date_max = df["date"].max().date()
@@ -716,7 +749,7 @@ with tab_categories:
         fams_str = ", ".join([FAMILY_NAMES.get(c, str(c)) for c in selected_families])
         
         with st.spinner("Generating insight..."):
-            insight = generate_quick_insight_groq(
+            insight = generate_quick_insight_gemini(
                 fams_str, d_min, d_max,
                 total_sales_selected, leading_fam, trend_dir
             )
@@ -1014,13 +1047,15 @@ with tab_genai:
         )
     else:
         genai_api_key = _get_gemini_api_key()
+        key_valid, key_err = _validate_gemini_key(genai_api_key) if genai_api_key else (False, "")
         if not genai_api_key:
             st.warning(
-                "No `GEMINI_API_KEY` found in secrets or environment. Get a free key at "
-                "[aistudio.google.com/apikey](https://aistudio.google.com/apikey) and add it "
-                "as `GEMINI_API_KEY` to `.streamlit/secrets.toml` (locally) or your Streamlit "
-                "Cloud app's Secrets settings (deployed)."
+                "No `GEMINI_API_KEY` found. Paste a valid key in the **sidebar** 🔑 or add it "
+                "to `.streamlit/secrets.toml`. Get a free key at "
+                "[aistudio.google.com/apikey](https://aistudio.google.com/apikey)."
             )
+        elif not key_valid:
+            st.error(f"⚠️ {key_err}")
         else:
             genai_client = get_genai_client(genai_api_key)
 
@@ -1060,11 +1095,25 @@ with tab_genai:
                                 genai_client, user_q, st.session_state.genai_chat_contents
                             )
                         except Exception as e:
-                            genai_answer = (
-                                f"Something went wrong calling the Gemini API: {e}. "
-                                "This is often a rate limit on the free tier — wait a "
-                                "minute and try again."
-                            )
+                            err = str(e)
+                            if "401" in err or "UNAUTHENTICATED" in err:
+                                genai_answer = (
+                                    "🔑 **Invalid API key.** Your `GEMINI_API_KEY` was "
+                                    "rejected (401 Unauthenticated). Please paste a valid "
+                                    "key in the **sidebar** — it should start with `AIzaSy…`. "
+                                    "Get one free at [aistudio.google.com/apikey]"
+                                    "(https://aistudio.google.com/apikey)."
+                                )
+                            elif "429" in err or "RESOURCE_EXHAUSTED" in err:
+                                genai_answer = (
+                                    "⏳ **Rate limit hit.** The Gemini free tier limits "
+                                    "requests per minute — wait 60 seconds and try again."
+                                )
+                            else:
+                                genai_answer = (
+                                    f"Something went wrong calling the Gemini API: {e}. "
+                                    "Check the sidebar to verify your API key is valid."
+                                )
                             genai_tool_log = []
                             genai_new_contents = st.session_state.genai_chat_contents
                     st.markdown(genai_answer)
