@@ -453,7 +453,7 @@ def generate_quick_insight_gemini(selected_families_str, date_min_str, date_max_
             "Keep it professional and concise. Do not add any filler text."
         )
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=prompt,
         )
         return response.text.strip()
@@ -500,7 +500,7 @@ def get_genai_client(api_key):
 
 
 def run_genai_agent(client, user_message, chat_contents=None,
-                     model="gemini-2.5-flash", max_rounds=5):
+                     model="gemini-3.6-flash", max_rounds=5):
     """One user turn of the agent loop: calls the model, executes any tool calls
     it asks for, and keeps going (up to max_rounds) until it returns plain text.
 
