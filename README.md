@@ -5,7 +5,6 @@
 ![LightGBM](https://img.shields.io/badge/LightGBM-4.6.0-green?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
 
-> **[▶️ Live Demo Placeholder: Add link here]**
 
 This repository contains a comprehensive time-series forecasting pipeline and interactive web application for predicting retail store sales, based on the Corporación Favorita Kaggle dataset.
 
