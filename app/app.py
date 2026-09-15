@@ -7,6 +7,21 @@ warnings.filterwarnings("ignore")
 # Set page config FIRST, before any other st commands or heavy imports
 st.set_page_config(page_title="Favorita Sales Forecasting", layout="wide", page_icon="📈")
 
+import sys
+import os
+
+# Ensure the repository root is in sys.path
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
+# Remove the app directory from sys.path so 'import app' doesn't find app.py
+app_dir = os.path.abspath(os.path.dirname(__file__))
+while app_dir in sys.path:
+    sys.path.remove(app_dir)
+if "" in sys.path:
+    sys.path.remove("")
+
 # Local imports
 from app.data_loader import initialize_data_and_model
 from app.tabs import (
