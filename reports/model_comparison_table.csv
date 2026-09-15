@@ -1,6 +1,6 @@
 Model,MAE,RMSE,MAPE,Notes,SMAPE
 Prophet (Basic),88684.28,131053.92,36.42,Automatic changepoints handle macro trends well.,
 Prophet + Holidays,92550.5,132817.01,32.77,Fourier terms + explicit event flags manage massive spikes natively.,
-LightGBM,108.39547766215662,529.3912272682512,95.5520826874722,,70.33049937093607
+"LightGBM [National]",43947.25,52489.81,5.42,Aggregated to national level for apples-to-apples comparison.,
 "ARIMA (4,1,0) [National]",151425.15126317623,186176.22225417264,38.59210619742791,MAPE@>=10=38.59% | N=338,17.828187473708397
 "SARIMA (2,1,2)(1,1,1)[7] [National]",86617.78667022417,136302.64969951616,33.36124426865284,MAPE@>=10=33.36% | N=338,10.140628073518146

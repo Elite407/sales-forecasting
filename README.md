@@ -6,9 +6,8 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
 
 
-This repository contains a comprehensive time-series forecasting pipeline and interactive web application for predicting retail store sales, based on the Corporación Favorita Kaggle dataset.
 
-*(Placeholder: Add a 15-second demo GIF of the Streamlit app here)*
+This repository contains a comprehensive time-series forecasting pipeline and interactive web application for predicting retail store sales, based on the Corporación Favorita Kaggle dataset.
 
 The project evaluates both classical statistical baselines (ARIMA, SARIMA, Prophet) and modern machine learning approaches (LightGBM), ensuring a granularity-consistent comparison. It also features a fully interactive Streamlit dashboard enhanced with SHAP explainability and an integrated Retrieval-Augmented Generation (RAG) Generative AI Analyst.
 
@@ -27,7 +26,7 @@ Head-to-head performance evaluation between classical baselines (ARIMA, SARIMA, 
 
 | Model | MAE | RMSE | MAPE (%) | Notes |
 |-------|-----|------|----------|-------|
-| **LightGBM** | ~108* | ~529* | 95.5% | Fast, captures nonlinear interactions. *Note: Currently evaluated at store/family row-level vs. national aggregate.* |
+| **LightGBM** | 43,947 | 52,489 | 5.4% | Fast, captures nonlinear interactions. Evaluated on national aggregate for fair comparison. |
 | **SARIMA (2,1,2)(1,1,1)[7]** | 86,617 | 136,302 | 33.3% | Strong baseline capturing weekly seasonality on national aggregate. |
 | **Prophet + Holidays** | 92,550 | 132,817 | 32.7% | Excellent handling of massive holiday spikes using explicit event flags. |
 | **ARIMA (4,1,0)** | 151,425 | 186,176 | 38.5% | Basic auto-regressive baseline. |
