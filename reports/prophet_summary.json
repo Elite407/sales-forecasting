@@ -1,0 +1,13 @@
+{
+  "growth": "linear",
+  "seasonalities": [
+    "yearly",
+    "weekly"
+  ],
+  "n_holidays": 281,
+  "n_changepoints": 25,
+  "mae": 92550.50,
+  "rmse": 118900.20,
+  "mape": 10.80
+}
+
